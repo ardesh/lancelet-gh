@@ -15,7 +15,7 @@ namespace Lancelet
 
         public override Guid Id => new Guid("8F3A2D1E-5B9C-4E7A-8D2F-1C6B9A4E3F7D");
 
-        public override string AuthorName => "Ardeshir Aliaskari";
+        public override string AuthorName => "Lancelet Contributors";
 
         public override string AuthorContact => "https://github.com/ardesh/lancelet-gh";
 
