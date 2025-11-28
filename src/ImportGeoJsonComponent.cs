@@ -96,7 +96,7 @@ namespace Lancelet
                 var curves = new List<Curve>();
                 var points = new List<Point3d>();
                 var names = new List<string>();
-                var attributes = new DataTree<string>();
+                var attributes = new Grasshopper.DataTree<string>();
 
                 JArray features = (JArray)geoJson["features"];
                 if (features == null)
