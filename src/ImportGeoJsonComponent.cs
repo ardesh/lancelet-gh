@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using Grasshopper.Kernel;
 using Grasshopper.Kernel.Data;
 using Grasshopper.Kernel.Types;
@@ -28,6 +30,10 @@ namespace Lancelet
             pManager.AddNumberParameter("EAP Elevation", "Elev", "Earth Anchor Point Elevation (model units)", GH_ParamAccess.item, 3865.44);
             pManager.AddNumberParameter("True North Angle", "TN", "True North rotation angle (degrees CCW from +Y)", GH_ParamAccess.item, 48.08);
             pManager.AddTextParameter("Model Units", "Units", "Model coordinate units (Inches, Feet, Meters)", GH_ParamAccess.item, "Inches");
+            pManager.AddTextParameter("Filter", "Filter", "Filter features by attribute (e.g., 'ADDRESS:126'). Leave empty for all.", GH_ParamAccess.item, "");
+
+            // Make filter optional
+            pManager[6].Optional = true;
         }
 
         protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
@@ -36,6 +42,7 @@ namespace Lancelet
             pManager.AddPointParameter("Points", "P", "Imported points", GH_ParamAccess.list);
             pManager.AddTextParameter("Names", "N", "Feature names", GH_ParamAccess.list);
             pManager.AddGenericParameter("Attributes", "A", "Feature attributes (DataTree)", GH_ParamAccess.tree);
+            pManager.AddTextParameter("Info", "I", "Transformation information", GH_ParamAccess.list);
         }
 
         protected override void SolveInstance(IGH_DataAccess DA)
@@ -47,6 +54,7 @@ namespace Lancelet
             double eapElev = 0;
             double trueNorthAngle = 0;
             string modelUnits = null;
+            string filter = "";
 
             if (!DA.GetData(0, ref filePath)) return;
             if (!DA.GetData(1, ref eapLat)) return;
@@ -54,6 +62,7 @@ namespace Lancelet
             if (!DA.GetData(3, ref eapElev)) return;
             if (!DA.GetData(4, ref trueNorthAngle)) return;
             if (!DA.GetData(5, ref modelUnits)) return;
+            DA.GetData(6, ref filter); // Optional filter
 
             // Validate file path
             if (!File.Exists(filePath))
@@ -105,11 +114,34 @@ namespace Lancelet
                     return;
                 }
 
+                // Parse filter if provided
+                string filterKey = "";
+                string filterValue = "";
+                if (!string.IsNullOrWhiteSpace(filter))
+                {
+                    var parts = filter.Split(':');
+                    if (parts.Length == 2)
+                    {
+                        filterKey = parts[0].Trim();
+                        filterValue = parts[1].Trim();
+                    }
+                }
+
                 for (int i = 0; i < features.Count; i++)
                 {
                     JObject feature = (JObject)features[i];
                     JObject geometry = (JObject)feature["geometry"];
                     JObject properties = (JObject)feature["properties"];
+
+                    // Apply filter if specified
+                    if (!string.IsNullOrEmpty(filterKey) && properties != null)
+                    {
+                        var propValue = properties[filterKey]?.ToString();
+                        if (propValue == null || propValue.IndexOf(filterValue, StringComparison.OrdinalIgnoreCase) < 0)
+                        {
+                            continue; // Skip this feature
+                        }
+                    }
 
                     string featureName = properties?["NAME"]?.ToString() ??
                                        properties?["name"]?.ToString() ??
@@ -122,9 +154,11 @@ namespace Lancelet
                     switch (geomType)
                     {
                         case "Point":
+                            double ptElevMeters = coordinates.Count() > 2 ? (double)coordinates[2] : 0.0;
                             Point3d pt = transformer.GeoToModel(
                                 (double)coordinates[0],
-                                (double)coordinates[1]
+                                (double)coordinates[1],
+                                ptElevMeters
                             );
                             points.Add(pt);
                             names.Add(featureName);
@@ -190,11 +224,54 @@ namespace Lancelet
                     }
                 }
 
+                // Collect available attribute keys from first feature
+                var availableKeys = new System.Collections.Generic.HashSet<string>();
+                if (features.Count > 0)
+                {
+                    for (int i = 0; i < Math.Min(10, features.Count); i++)
+                    {
+                        var props = (JObject)features[i]["properties"];
+                        if (props != null)
+                        {
+                            foreach (var prop in props)
+                            {
+                                availableKeys.Add(prop.Key);
+                            }
+                        }
+                    }
+                }
+
+                // Generate transformation info
+                var info = new List<string>
+                {
+                    "=== TRANSFORMATION ===",
+                    $"Earth Anchor Point: {eapLat:F6}°N, {eapLon:F6}°W",
+                    $"EAP Elevation: {eapElev:F2} {modelUnits} ({eapElev / metersToModelUnits:F2}m)",
+                    $"True North: {trueNorthAngle:F2}° CCW from +Y",
+                    $"Model Units: {modelUnits} ({metersToModelUnits:F4} per meter)",
+                    $"Coordinate System: WGS84 (EPSG:4326)",
+                    "",
+                    "=== IMPORT RESULTS ===",
+                    $"Total Features in File: {features.Count}",
+                    $"Features Imported: {curves.Count + points.Count}",
+                    $"Curves: {curves.Count}, Points: {points.Count}",
+                    $"Filter Applied: {(string.IsNullOrEmpty(filter) ? "None (all features)" : filter)}",
+                    "",
+                    "=== FILTER SYNTAX ===",
+                    "Format: ATTRIBUTE:VALUE",
+                    "Example: NAME:126",
+                    "Example: BUFFER_FT:100",
+                    "Leave empty to import all features",
+                    "",
+                    $"Available attributes: {string.Join(", ", availableKeys)}"
+                };
+
                 // Set outputs
                 DA.SetDataList(0, curves);
                 DA.SetDataList(1, points);
                 DA.SetDataList(2, names);
                 DA.SetDataTree(3, attributes);
+                DA.SetDataList(4, info);
 
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Remark,
                     $"Imported {curves.Count} curve(s) and {points.Count} point(s)");
@@ -213,7 +290,9 @@ namespace Lancelet
             {
                 double lon = (double)coord[0];
                 double lat = (double)coord[1];
-                pts.Add(transformer.GeoToModel(lon, lat));
+                // Check if Z coordinate exists (3D GeoJSON)
+                double elevationMeters = coord.Count > 2 ? (double)coord[2] : 0.0;
+                pts.Add(transformer.GeoToModel(lon, lat, elevationMeters));
             }
 
             if (pts.Count < 2) return null;
@@ -222,7 +301,21 @@ namespace Lancelet
             return polyline.ToNurbsCurve();
         }
 
-        protected override System.Drawing.Bitmap Icon => null; // TODO: Add icon
+        protected override Bitmap Icon
+        {
+            get
+            {
+                try
+                {
+                    var assembly = Assembly.GetExecutingAssembly();
+                    var stream = assembly.GetManifestResourceStream("Lancelet.icon.bmp");
+                    if (stream != null)
+                        return new Bitmap(stream);
+                }
+                catch { }
+                return null;
+            }
+        }
 
         public override Guid ComponentGuid => new Guid("A1B2C3D4-E5F6-7890-ABCD-EF1234567890");
     }
@@ -267,7 +360,7 @@ namespace Lancelet
             eastVectorY = -Math.Sin(angleRad);
         }
 
-        public Point3d GeoToModel(double lon, double lat)
+        public Point3d GeoToModel(double lon, double lat, double elevationMeters = 0.0)
         {
             // Step 1: Offset from EAP in degrees
             double lonOffset = lon - eapLon;
@@ -286,8 +379,11 @@ namespace Lancelet
             double modelX = northModelUnits * northVectorX + eastModelUnits * eastVectorX;
             double modelY = northModelUnits * northVectorY + eastModelUnits * eastVectorY;
 
-            // Step 5: Return point at EAP elevation
-            return new Point3d(modelX, modelY, eapElev);
+            // Step 5: Calculate Z elevation in model units
+            // Convert elevation from meters to model units, then add to EAP elevation
+            double modelZ = eapElev + (elevationMeters * metersToModelUnits);
+
+            return new Point3d(modelX, modelY, modelZ);
         }
     }
 }

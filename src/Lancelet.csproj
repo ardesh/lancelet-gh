@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>net48</TargetFramework>
-    <Version>0.1.0</Version>
+    <Version>0.3.0</Version>
     <Title>Lancelet</Title>
     <Description>GeoJSON to Rhino importer with Earth Anchor Point transformation</Description>
     <Authors>126 Governors Drive Project</Authors>
@@ -36,5 +36,15 @@
     <!-- Newtonsoft.Json for JSON parsing -->
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- Embed icon as resource -->
+    <EmbeddedResource Include="icon.bmp" />
+  </ItemGroup>
+
+  <!-- Post-build: Copy DLL to GHA -->
+  <Target Name="CopyToGHA" AfterTargets="Build">
+    <Copy SourceFiles="$(TargetDir)$(TargetName).dll" DestinationFiles="$(TargetDir)$(TargetName).gha" />
+  </Target>
 
 </Project>

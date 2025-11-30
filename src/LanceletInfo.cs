@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Reflection;
 using Grasshopper.Kernel;
 
 namespace Lancelet
@@ -8,7 +9,21 @@ namespace Lancelet
     {
         public override string Name => "Lancelet";
 
-        public override Bitmap Icon => null; // TODO: Add icon
+        public override Bitmap Icon
+        {
+            get
+            {
+                try
+                {
+                    var assembly = Assembly.GetExecutingAssembly();
+                    var stream = assembly.GetManifestResourceStream("Lancelet.icon.bmp");
+                    if (stream != null)
+                        return new Bitmap(stream);
+                }
+                catch { }
+                return null;
+            }
+        }
 
         public override string Description =>
             "GeoJSON to Rhino importer with Earth Anchor Point transformation";
@@ -19,6 +34,6 @@ namespace Lancelet
 
         public override string AuthorContact => "https://github.com/ardesh/lancelet-gh";
 
-        public override string Version => "0.1.0";
+        public override string Version => "0.3.0";
     }
 }
